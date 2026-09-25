@@ -99,6 +99,7 @@ enum GhostCmd {
     /// One command keeps a workspace-slide frame on a single vblank.
     Present {
         clips: Vec<GhostClip>,
+        flush: bool,
         reply: Sender<()>,
     },
     CreateOverlay {
@@ -238,10 +239,16 @@ fn handle_cmd(cmd: GhostCmd) {
         GhostCmd::Destroy { host_hwnd, hthumb } => {
             destroy_ghost(host_hwnd, hthumb);
         }
-        GhostCmd::Present { clips, reply } => {
+        GhostCmd::Present {
+            clips,
+            flush,
+            reply,
+        } => {
             present_frame(&clips);
-            unsafe {
-                let _ = DwmFlush();
+            if flush {
+                unsafe {
+                    let _ = DwmFlush();
+                }
             }
             let _ = reply.send(());
         }
@@ -265,6 +272,16 @@ fn handle_cmd(cmd: GhostCmd) {
 
 /// Move every ghost for this frame, then block until DWM has composed it.
 pub fn present_clips(clips: Vec<GhostClip>) -> eyre::Result<()> {
+    send_clips(clips, true)
+}
+
+/// Move every ghost without waiting for composition, so the caller can make its
+/// own changes land in the same frame.
+pub fn show_clips(clips: Vec<GhostClip>) -> eyre::Result<()> {
+    send_clips(clips, false)
+}
+
+fn send_clips(clips: Vec<GhostClip>, flush: bool) -> eyre::Result<()> {
     if clips.is_empty() {
         return Ok(());
     }
@@ -273,6 +290,7 @@ pub fn present_clips(clips: Vec<GhostClip>) -> eyre::Result<()> {
         .cmd_tx
         .send(GhostCmd::Present {
             clips,
+            flush,
             reply: reply_tx,
         })
         .map_err(|e| eyre::eyre!("ghost owner channel send failed: {e}"))?;

@@ -22,6 +22,7 @@ use crate::animation::RenderDispatcher;
 use crate::animation::ghost::GhostWindow;
 use crate::animation::ghost::RevealOverlay;
 use crate::animation::ghost::present_clips;
+use crate::animation::ghost::show_clips;
 use crate::animation::lerp::Lerp;
 use crate::animation::prefix::AnimationPrefix;
 use crate::animation::prefix::new_animation_key;
@@ -350,6 +351,7 @@ impl WorkspaceSlideDispatcher {
         for hwnd in request.incoming {
             if let Some(existing) = windows.iter_mut().find(|window| window.hwnd == hwnd) {
                 existing.incoming = true;
+                existing.cloaked = true;
                 existing.floating = request.floating.contains(&hwnd);
                 existing.outer = request.floating_outer.get(&hwnd).copied();
                 continue;
@@ -439,8 +441,12 @@ impl WorkspaceSlideDispatcher {
                 window.target = shift_x(rect, -self.offset);
             }
 
-            cloak_window(window.hwnd);
-            window.cloaked = true;
+            // Outgoing windows are still on screen; they are cloaked once their
+            // ghosts are up so the desktop never shows through between the two.
+            if window.incoming {
+                cloak_window(window.hwnd);
+                window.cloaked = true;
+            }
 
             match GhostWindow::create_with_visibility(
                 window.hwnd,
@@ -463,14 +469,23 @@ impl WorkspaceSlideDispatcher {
             }
         }
 
-        let any_active = windows.iter().any(|window| window.active);
-        drop(windows);
-
         if !opening.is_empty()
-            && let Err(error) = present_clips(opening)
+            && let Err(error) = show_clips(opening)
         {
             tracing::trace!("workspace slide: opening frame failed: {error}");
         }
+        for window in windows.iter_mut() {
+            if window.active && !window.cloaked {
+                cloak_window(window.hwnd);
+                window.cloaked = true;
+            }
+        }
+        unsafe {
+            let _ = DwmFlush();
+        }
+
+        let any_active = windows.iter().any(|window| window.active);
+        drop(windows);
 
         if !any_active {
             self.finish(true);
@@ -615,8 +630,9 @@ fn tracked_window(
         source_offset: (0, 0),
         active: false,
         ghost: None,
-        // The caller cloaks every participant before the layout snap.
-        cloaked: true,
+        // The caller cloaks incoming windows before the layout snap. Outgoing ones
+        // stay visible until their ghosts are up.
+        cloaked: incoming,
     }
 }
 

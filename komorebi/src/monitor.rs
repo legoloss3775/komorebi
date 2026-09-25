@@ -248,7 +248,9 @@ impl Monitor {
                         .collect::<Vec<_>>();
                     // Cloak before the layout so a retile on an occupied workspace
                     // is not visible as a snap. The ghost plays that change.
-                    workspace_animation::cloak_windows(&participants);
+                    // Outgoing windows are not moved, and stay on screen until their
+                    // ghosts replace them.
+                    workspace_animation::cloak_windows(&incoming);
                     workspace_animation::begin_instant_position();
                     let laid_out = self.update_focused_workspace(None);
                     workspace_animation::end_instant_position();
